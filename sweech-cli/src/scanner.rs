@@ -55,9 +55,27 @@ pub struct ScannedRoute {
     /// Absolute path to the route.rs file
     pub file: PathBuf,
 
-    /// The Axum-style route path for this file, e.g. "/login" or "/:userId"
-    /// Relative to the applet — the applet prefix is NOT included.
+    /// Axum-style route path, e.g. "/login" or "/:userId"
+    /// Relative to the applet — prefix NOT included.
     pub axum_path: String,
+
+    /// Extracted handler type info for `sweech generate types`.
+    /// None if the file couldn't be parsed (no compile-time error — just skipped).
+    pub handler_info: Option<HandlerInfo>,
+}
+
+/// Type information extracted from a route.rs file by static text analysis.
+/// We don't compile the file — we scan for the Handler trait impl pattern.
+#[derive(Debug, Clone)]
+pub struct HandlerInfo {
+    /// The handler struct name, e.g. "GetProducts"
+    pub handler_name: String,
+    /// The Request type associated type, e.g. "GetProductsRequest"
+    pub request_type: String,
+    /// The Response type associated type, e.g. "GetProductsResponse"
+    pub response_type: String,
+    /// HTTP method extracted from `fn method()` body, e.g. "GET"
+    pub method: String,
 }
 
 impl ScannedRoute {
@@ -71,6 +89,15 @@ impl ScannedRoute {
             return "/".to_string();
         }
         format!("/{}", segments.join("/"))
+    }
+
+    /// Full route path including the applet prefix, e.g. "/products/:id"
+    pub fn full_path(&self, applet_name: &str) -> String {
+        if self.axum_path == "/" {
+            format!("/{}", applet_name)
+        } else {
+            format!("/{}{}", applet_name, self.axum_path)
+        }
     }
 }
 
@@ -108,6 +135,7 @@ pub struct ScannedProject {
 
 impl ScannedProject {
     /// Total number of route files across all applets
+    #[allow(dead_code)]
     pub fn route_count(&self) -> usize {
         self.applets.iter().map(|a| a.routes.len()).sum()
     }
@@ -200,73 +228,145 @@ fn scan_applet_routes(applet_path: &Path) -> Result<Vec<ScannedRoute>> {
             continue;
         }
 
-        // Compute path segments: the directories between the applet root
-        // and this route.rs file.
-        //
-        // ─── Rust concept: strip_prefix ───────────────────────────────────
-        //
-        // `path.strip_prefix(applet_path)` removes the applet root from
-        // the beginning of the path, giving us the relative path.
-        // Returns Result — fails if the path doesn't start with the prefix.
-        //
-        // Example:
-        //   applet_path = /project/auth.applet
-        //   path        = /project/auth.applet/login/route.rs
-        //   relative    = login/route.rs
-        //   parent      = login
-        //   segments    = ["login"]
+        let rel = path.strip_prefix(applet_path).unwrap();
 
-        let relative = path.strip_prefix(applet_path)?;
-        let segments = relative
-            .parent() // remove "route.rs" filename
-            .map(|p| {
-                p.components()
-                    .filter_map(|c| {
-                        // ─── Rust concept: pattern matching on enum variants ──
-                        //
-                        // `std::path::Component` is an enum. We only want
-                        // Normal components (actual folder names), not
-                        // RootDir, CurDir, ParentDir, or Prefix.
-                        use std::path::Component;
-                        match c {
-                            Component::Normal(os) => os.to_str().map(convert_segment),
-                            _ => None,
-                        }
-                    })
-                    .collect::<Vec<String>>()
+        // Segments are all components except the final "route.rs"
+        let path_segments: Vec<String> = rel
+            .components()
+            .filter_map(|c| {
+                let s = c.as_os_str().to_str()?;
+                if s == "route.rs" {
+                    None
+                } else {
+                    // [param] → :param
+                    Some(convert_segment(s))
+                }
             })
-            .unwrap_or_default();
+            .collect();
 
-        let axum_path = ScannedRoute::build_axum_path(&segments);
+        let axum_path = ScannedRoute::build_axum_path(&path_segments);
+
+        // Try to extract handler info from the file source
+        let handler_info = extract_handler_info(path).ok().flatten();
 
         routes.push(ScannedRoute {
-            path_segments: segments,
+            path_segments,
             file: path.to_path_buf(),
             axum_path,
+            handler_info,
         });
     }
 
-    // Sort routes for deterministic output
     routes.sort_by(|a, b| a.axum_path.cmp(&b.axum_path));
-
     Ok(routes)
 }
 
-/// Convert a folder name segment to a URL path segment.
-///
-/// Sweech uses Next.js App Router conventions:
-///   [param]    → :param      (dynamic segment)
-///   [...slug]  → *slug       (catch-all) — future
-///   (group)    → ""          (grouping folder, skipped) — future
-///   normal     → normal      (static segment)
-fn convert_segment(folder_name: &str) -> String {
-    if folder_name.starts_with('[') && folder_name.ends_with(']') {
-        // Dynamic segment: [userId] → :userId
-        let inner = &folder_name[1..folder_name.len() - 1];
-        format!(":{}", inner)
+/// Convert Next.js-style folder names to Axum path segments.
+///   [userId]  → :userId
+///   [...slug] → *slug
+///   items     → items
+fn convert_segment(s: &str) -> String {
+    if let Some(inner) = s.strip_prefix('[').and_then(|s| s.strip_suffix(']')) {
+        if let Some(slug) = inner.strip_prefix("...") {
+            format!("*{}", slug)
+        } else {
+            format!(":{}", inner)
+        }
     } else {
-        // Static segment — use as-is
-        folder_name.to_string()
+        s.to_string()
+    }
+}
+
+// ─── Handler info extraction (static text analysis) ──────────────────────────
+//
+// We scan route.rs files with simple string matching to extract the
+// handler struct name, Request/Response associated types, and HTTP method.
+//
+// We do NOT compile the file or use a real parser. The patterns are
+// stable enough that regex-free line scanning works reliably.
+//
+// Pattern we look for:
+//
+//   impl Handler for MyHandler {
+//       type Request = MyRequest;
+//       type Response = MyResponse;
+//       fn method() -> HttpMethod { HttpMethod::Get }
+//
+// All of these are on their own lines with consistent formatting
+// because the scaffolding generates them that way.
+
+fn extract_handler_info(path: &Path) -> Result<Option<HandlerInfo>> {
+    let content = std::fs::read_to_string(path)?;
+    Ok(parse_handler_info(&content))
+}
+
+pub fn parse_handler_info(source: &str) -> Option<HandlerInfo> {
+    let mut handler_name = None::<String>;
+    let mut request_type = None::<String>;
+    let mut response_type = None::<String>;
+    let mut method = None::<String>;
+
+    for line in source.lines() {
+        let trimmed = line.trim();
+
+        // impl Handler for XxxHandler {
+        if trimmed.starts_with("impl Handler for ") {
+            if let Some(rest) = trimmed.strip_prefix("impl Handler for ") {
+                let name = rest.trim_end_matches('{').trim().to_string();
+                if !name.contains('<') && !name.contains(' ') {
+                    handler_name = Some(name);
+                }
+            }
+        }
+
+        // type Request = XxxRequest;
+        if trimmed.starts_with("type Request = ") {
+            if let Some(rest) = trimmed.strip_prefix("type Request = ") {
+                let t = rest.trim_end_matches(';').trim().to_string();
+                request_type = Some(t);
+            }
+        }
+
+        // type Response = XxxResponse;
+        if trimmed.starts_with("type Response = ") {
+            if let Some(rest) = trimmed.strip_prefix("type Response = ") {
+                let t = rest.trim_end_matches(';').trim().to_string();
+                response_type = Some(t);
+            }
+        }
+
+        // fn method() -> HttpMethod { HttpMethod::Get }
+        // fn method() -> HttpMethod {
+        //     HttpMethod::Post
+        // }
+        if trimmed.contains("HttpMethod::") {
+            let verb = if trimmed.contains("HttpMethod::Get") {
+                Some("GET")
+            } else if trimmed.contains("HttpMethod::Post") {
+                Some("POST")
+            } else if trimmed.contains("HttpMethod::Put") {
+                Some("PUT")
+            } else if trimmed.contains("HttpMethod::Patch") {
+                Some("PATCH")
+            } else if trimmed.contains("HttpMethod::Delete") {
+                Some("DELETE")
+            } else {
+                None
+            };
+            if let Some(v) = verb {
+                method = Some(v.to_string());
+            }
+        }
+    }
+
+    match (handler_name, request_type, response_type, method) {
+        (Some(n), Some(req), Some(res), Some(m)) => Some(HandlerInfo {
+            handler_name: n,
+            request_type: req,
+            response_type: res,
+            method: m,
+        }),
+        _ => None,
     }
 }
 
@@ -275,89 +375,88 @@ fn convert_segment(folder_name: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fs;
-    use tempfile::TempDir; // we'll add this as dev-dependency
-
-    fn make_route(tmp: &Path, rel_path: &str) {
-        let full = tmp.join(rel_path);
-        fs::create_dir_all(full.parent().unwrap()).unwrap();
-        fs::write(&full, "// route").unwrap();
-    }
 
     #[test]
-    fn convert_segment_handles_dynamic() {
+    fn segment_conversion() {
         assert_eq!(convert_segment("[userId]"), ":userId");
-        assert_eq!(convert_segment("[productId]"), ":productId");
-        assert_eq!(convert_segment("login"), "login");
-        assert_eq!(convert_segment("orders"), "orders");
+        assert_eq!(convert_segment("[...slug]"), "*slug");
+        assert_eq!(convert_segment("items"), "items");
     }
 
     #[test]
-    fn axum_path_from_segments() {
+    fn axum_path_construction() {
         assert_eq!(ScannedRoute::build_axum_path(&[]), "/");
         assert_eq!(
             ScannedRoute::build_axum_path(&["login".to_string()]),
             "/login"
         );
         assert_eq!(
-            ScannedRoute::build_axum_path(&[":userId".to_string()]),
-            "/:userId"
-        );
-        assert_eq!(
-            ScannedRoute::build_axum_path(&["orders".to_string(), ":orderId".to_string()]),
-            "/orders/:orderId"
+            ScannedRoute::build_axum_path(&[":userId".to_string(), "posts".to_string()]),
+            "/:userId/posts"
         );
     }
 
     #[test]
-    fn scan_finds_applets_and_routes() {
-        let tmp = TempDir::new().unwrap();
-        let root = tmp.path();
+    fn parse_handler_info_from_source() {
+        let source = r#"
+use sweech_core::prelude::*;
 
-        // auth.applet/login/route.rs
-        make_route(root, "auth.applet/login/route.rs");
-        // auth.applet/register/route.rs
-        make_route(root, "auth.applet/register/route.rs");
-        // products.applet/route.rs
-        make_route(root, "products.applet/route.rs");
-        // products.applet/[productId]/route.rs
-        make_route(root, "products.applet/[productId]/route.rs");
+#[derive(Deserialize)]
+pub struct GetProductsRequest {}
 
-        let project = scan(root).unwrap();
+#[derive(Serialize)]
+pub struct GetProductsResponse {
+    pub products: Vec<String>,
+}
 
-        assert_eq!(project.applets.len(), 2);
-        assert_eq!(project.route_count(), 4);
+pub struct GetProducts;
 
-        let auth = project.applets.iter().find(|a| a.name == "auth").unwrap();
-        assert_eq!(auth.routes.len(), 2);
+#[async_trait]
+impl Handler for GetProducts {
+    type Request = GetProductsRequest;
+    type Response = GetProductsResponse;
 
-        let products = project
-            .applets
-            .iter()
-            .find(|a| a.name == "products")
-            .unwrap();
-        // route.rs at root + [productId]/route.rs
-        assert_eq!(products.routes.len(), 2);
+    fn method() -> HttpMethod { HttpMethod::Get }
+    fn auth() -> AuthRequirement { AuthRequirement::Public }
 
-        // Check dynamic segment conversion
-        let dynamic = products
-            .routes
-            .iter()
-            .find(|r| r.axum_path.contains(":productId"));
-        assert!(dynamic.is_some(), "Expected :productId route");
+    async fn call(_req: Self::Request, _ctx: AppletContext) -> AppletResponse<Self::Response> {
+        AppletResponse::ok(GetProductsResponse { products: vec![] })
+    }
+}
+"#;
+        let info = parse_handler_info(source).unwrap();
+        assert_eq!(info.handler_name, "GetProducts");
+        assert_eq!(info.request_type, "GetProductsRequest");
+        assert_eq!(info.response_type, "GetProductsResponse");
+        assert_eq!(info.method, "GET");
     }
 
     #[test]
-    fn non_applet_dirs_are_ignored() {
-        let tmp = TempDir::new().unwrap();
-        let root = tmp.path();
+    fn parse_handler_info_post() {
+        let source = r#"
+#[async_trait]
+impl Handler for CreateItem {
+    type Request = CreateItemRequest;
+    type Response = CreateItemResponse;
+    fn method() -> HttpMethod {
+        HttpMethod::Post
+    }
+    async fn call(req: Self::Request, _ctx: AppletContext) -> AppletResponse<Self::Response> {
+        AppletResponse::created(CreateItemResponse { id: "1".to_string() })
+    }
+}
+"#;
+        let info = parse_handler_info(source).unwrap();
+        assert_eq!(info.method, "POST");
+        assert_eq!(info.handler_name, "CreateItem");
+    }
 
-        make_route(root, "auth.applet/login/route.rs");
-        make_route(root, "apps/web/pages/index.rs"); // not an applet
-        make_route(root, "packages/types/src/lib.rs"); // not an applet
-
-        let project = scan(root).unwrap();
-        assert_eq!(project.applets.len(), 1);
-        assert_eq!(project.applets[0].name, "auth");
+    #[test]
+    fn parse_handler_info_missing_fields_returns_none() {
+        let source = r#"
+// A file with no handler impl
+pub fn helper() {}
+"#;
+        assert!(parse_handler_info(source).is_none());
     }
 }

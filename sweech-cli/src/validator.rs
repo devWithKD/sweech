@@ -1,4 +1,4 @@
-use crate::manifest::{BuildMode, DeployTarget, FrontendFramework, Manifest, ServeMode};
+use crate::manifest::{BuildMode, DeployTarget, Manifest, ServeMode};
 use crate::scanner::ScannedProject;
 
 // ─── What is this file? ───────────────────────────────────────────────────────
@@ -155,10 +155,7 @@ fn check_frontend_serve_rules(manifest: &Manifest) -> Vec<ValidationIssue> {
     let mut issues = Vec::new();
 
     for frontend in &manifest.frontends {
-        let is_mobile = matches!(
-            frontend.framework,
-            FrontendFramework::Expo | FrontendFramework::Ionic
-        );
+        let is_mobile = frontend.framework.is_mobile();
 
         // embedded on mobile is a hard error
         if is_mobile && frontend.serve == Some(ServeMode::Embedded) {
@@ -184,10 +181,7 @@ fn check_frontend_serve_rules(manifest: &Manifest) -> Vec<ValidationIssue> {
             ));
         }
 
-        // api_prefix on standalone is a warning
-        if frontend.serve == Some(ServeMode::Standalone) && frontend.api_prefix != "/api"
-        // non-default means they explicitly set it
-        {
+        if frontend.serve == Some(ServeMode::Standalone) && frontend.api_prefix != "/api" {
             issues.push(ValidationIssue::warning(
                 "API_PREFIX_ON_STANDALONE",
                 format!(
@@ -202,13 +196,10 @@ fn check_frontend_serve_rules(manifest: &Manifest) -> Vec<ValidationIssue> {
     issues
 }
 
-/// SERVERLESS_BUILD_TARGET: deploy_target = "^build" in serverless mode is
-/// always a hard error — must use an explicit target like "vercel".
 fn check_serverless_frontend_deploy_target(manifest: &Manifest) -> Vec<ValidationIssue> {
     if manifest.build.mode != BuildMode::Serverless {
         return vec![];
     }
-
     manifest
         .frontends
         .iter()
@@ -276,12 +267,11 @@ mod tests {
 
     fn base_manifest(mode: BuildMode) -> Manifest {
         toml::from_str(&format!(
-            r#"
-            [project]
-            name = "test"
-            [build]
-            mode = "{}"
-        "#,
+            r#"[project]
+name = "test"
+[build]
+mode = "{}"
+"#,
             match mode {
                 BuildMode::Monolith => "monolith",
                 BuildMode::Microservices => "microservices",
@@ -294,28 +284,25 @@ mod tests {
     #[test]
     fn clean_manifest_has_no_issues() {
         let manifest = base_manifest(BuildMode::Monolith);
-        let project = empty_project();
-        let issues = validate(&manifest, &project);
-        assert!(issues.is_empty(), "Expected no issues, got: {:?}", issues);
+        let issues = validate(&manifest, &empty_project());
+        assert!(issues.is_empty(), "{:?}", issues);
     }
 
     #[test]
     fn monolith_with_mixed_runtime_is_error() {
         let manifest: Manifest = toml::from_str(
-            r#"
-            [project]
-            name = "test"
-            [build]
-            mode = "monolith"
-            runtime = "rust"
-            [[applet]]
-            name = "auth"
-            path = "auth.applet"
-            runtime = "typescript"
-        "#,
+            r#"[project]
+name = "test"
+[build]
+mode = "monolith"
+runtime = "rust"
+[[applet]]
+name = "auth"
+path = "auth.applet"
+runtime = "typescript"
+"#,
         )
         .unwrap();
-
         let issues = validate(&manifest, &empty_project());
         assert!(has_errors(&issues));
         assert!(issues.iter().any(|i| i.code == "MONOLITH_MIXED_RUNTIME"));
@@ -324,21 +311,19 @@ mod tests {
     #[test]
     fn embedded_on_expo_is_error() {
         let manifest: Manifest = toml::from_str(
-            r#"
-            [project]
-            name = "test"
-            [build]
-            mode = "monolith"
-            [[frontend]]
-            name = "mobile"
-            path = "apps/mobile"
-            framework = "expo"
-            deploy_target = "eas"
-            serve = "embedded"
-        "#,
+            r#"[project]
+name = "test"
+[build]
+mode = "monolith"
+[[frontend]]
+name = "mobile"
+path = "apps/mobile"
+framework = "expo"
+deploy_target = "eas"
+serve = "embedded"
+"#,
         )
         .unwrap();
-
         let issues = validate(&manifest, &empty_project());
         assert!(has_errors(&issues));
         assert!(issues.iter().any(|i| i.code == "EMBEDDED_ON_MOBILE"));
@@ -347,20 +332,18 @@ mod tests {
     #[test]
     fn build_frontend_missing_serve_is_error() {
         let manifest: Manifest = toml::from_str(
-            r#"
-            [project]
-            name = "test"
-            [build]
-            mode = "monolith"
-            [[frontend]]
-            name = "web"
-            path = "apps/web"
-            framework = "next"
-            deploy_target = "^build"
-        "#,
+            r#"[project]
+name = "test"
+[build]
+mode = "monolith"
+[[frontend]]
+name = "web"
+path = "apps/web"
+framework = "next"
+deploy_target = "^build"
+"#,
         )
         .unwrap();
-
         let issues = validate(&manifest, &empty_project());
         assert!(has_errors(&issues));
         assert!(
@@ -373,27 +356,57 @@ mod tests {
     #[test]
     fn serverless_with_generic_deploy_target_is_error() {
         let manifest: Manifest = toml::from_str(
-            r#"
-            [project]
-            name = "test"
-            [build]
-            mode = "serverless"
-            [[frontend]]
-            name = "web"
-            path = "apps/web"
-            framework = "next"
-            deploy_target = "^build"
-            serve = "standalone"
-        "#,
+            r#"[project]
+name = "test"
+[build]
+mode = "serverless"
+[[frontend]]
+name = "web"
+path = "apps/web"
+framework = "next"
+deploy_target = "^build"
+serve = "standalone"
+"#,
         )
         .unwrap();
-
         let issues = validate(&manifest, &empty_project());
         assert!(has_errors(&issues));
         assert!(
             issues
                 .iter()
                 .any(|i| i.code == "SERVERLESS_GENERIC_DEPLOY_TARGET")
+        );
+    }
+
+    #[test]
+    fn applet_runtime_in_monolith_is_warning() {
+        let manifest: Manifest = toml::from_str(
+            r#"[project]
+name = "test"
+[build]
+mode = "monolith"
+[[applet]]
+name = "auth"
+path = "auth.applet"
+runtime = "rust"
+"#,
+        )
+        .unwrap();
+        // Include the applet in the scanned project so APPLET_NOT_FOUND doesn't fire
+        let project = ScannedProject {
+            root: PathBuf::from("/tmp"),
+            applets: vec![crate::scanner::ScannedApplet {
+                name: "auth".to_string(),
+                path: PathBuf::from("/tmp/auth.applet"),
+                routes: vec![],
+            }],
+        };
+        let issues = validate(&manifest, &project);
+        assert!(!has_errors(&issues), "unexpected errors: {:?}", issues);
+        assert!(
+            issues
+                .iter()
+                .any(|i| i.code == "APPLET_RUNTIME_IN_MONOLITH")
         );
     }
 }

@@ -12,21 +12,34 @@ pub fn run() -> Result<()> {
     let project = scanner::scan(&root)?;
 
     println!("{}", "sweech check".bold());
-    println!("Project: {}", manifest.project.name.cyan());
-    println!("Mode:    {:?}", manifest.build.mode);
+    println!(
+        "  {} {}  mode: {}",
+        "project".dimmed(),
+        manifest.project.name.cyan().bold(),
+        format!("{:?}", manifest.build.mode).to_lowercase().green()
+    );
     println!();
 
-    // Print what was found
     println!("{}", "Discovered:".bold());
     for applet in &project.applets {
         println!("  {} {}", "▸".dimmed(), applet.name.cyan());
         for route in &applet.routes {
-            println!("    {} {}", "·".dimmed(), route.axum_path);
+            let method = route
+                .handler_info
+                .as_ref()
+                .map(|h| h.method.as_str())
+                .unwrap_or("???");
+            println!(
+                "    {} {:6} {}{}",
+                "·".dimmed(),
+                method,
+                applet.prefix().dimmed(),
+                route.axum_path.white()
+            );
         }
     }
     println!();
 
-    // Run validation
     let issues = validator::validate(&manifest, &project);
 
     if issues.is_empty() {
@@ -34,7 +47,6 @@ pub fn run() -> Result<()> {
         return Ok(());
     }
 
-    // Print issues grouped by severity
     let errors: Vec<_> = issues
         .iter()
         .filter(|i| i.severity == Severity::Error)
@@ -70,7 +82,6 @@ pub fn run() -> Result<()> {
                 .red()
                 .bold()
         );
-        // Exit with non-zero so CI pipelines fail correctly
         std::process::exit(1);
     } else {
         println!(

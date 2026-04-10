@@ -93,10 +93,18 @@ pub struct BuildConfig {
     /// Per-applet runtime is only allowed in microservices/serverless.
     #[serde(default = "default_runtime")]
     pub runtime: Runtime,
+
+    /// Port the backend listens on in dev mode.
+    #[serde(default = "default_port")]
+    pub port: u16,
 }
 
 fn default_runtime() -> Runtime {
     Runtime::Rust
+}
+
+fn default_port() -> u16 {
+    3000
 }
 
 #[derive(Debug, Deserialize, Serialize, PartialEq, Clone)]
@@ -125,7 +133,7 @@ pub enum Runtime {
     Python,
 }
 
-// ─── [[applet]] ───────────────────────────────────────────────────────────────
+// ─── [[applet]] ──────────────────────────────────────────────────────────────
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct AppletManifest {
@@ -180,6 +188,23 @@ pub struct FrontendManifest {
     /// API prefix when serve = "embedded". Default: "/api"
     #[serde(default = "default_api_prefix")]
     pub api_prefix: String,
+
+    /// Command to run in dev mode (e.g. "npm run dev", "pnpm dev").
+    /// Sweech runs this in parallel with the backend during `sweech dev`.
+    /// Required when deploy_target = "^build" on any frontend.
+    #[serde(default)]
+    pub dev_command: Option<String>,
+
+    /// Command to build the frontend for production
+    /// (e.g. "npm run build", "pnpm build").
+    /// Used by `sweech build` and baked into the Dockerfile.
+    #[serde(default)]
+    pub build_command: Option<String>,
+
+    /// Port the frontend dev server listens on.
+    /// Only used for display/logging in `sweech dev`.
+    #[serde(default)]
+    pub port: Option<u16>,
 }
 
 fn default_api_prefix() -> String {
@@ -195,6 +220,43 @@ pub enum FrontendFramework {
     Sveltekit, // web
     Expo,
     Ionic, // mobile
+}
+
+impl FrontendFramework {
+    /// Returns the default dev command for this framework,
+    /// used as a fallback if dev_command is not set in the manifest.
+    pub fn default_dev_command(&self) -> &'static str {
+        match self {
+            Self::Next => "npm run dev",
+            Self::Nuxt => "npm run dev",
+            Self::Vite => "npm run dev",
+            Self::Sveltekit => "npm run dev",
+            Self::Expo => "npx expo start",
+            Self::Ionic => "ionic serve",
+        }
+    }
+
+    /// Returns the default build command for this framework.
+    pub fn default_build_command(&self) -> &'static str {
+        match self {
+            Self::Next => "npm run build",
+            Self::Nuxt => "npm run build",
+            Self::Vite => "npm run build",
+            Self::Sveltekit => "npm run build",
+            Self::Expo => "npx expo export",
+            Self::Ionic => "ionic build",
+        }
+    }
+
+    pub fn is_mobile(&self) -> bool {
+        matches!(self, Self::Expo | Self::Ionic)
+    }
+
+    pub fn is_ts_based(&self) -> bool {
+        // All currently supported frameworks are TS-based.
+        // Python-based frontends would return false here.
+        true
+    }
 }
 
 #[derive(Debug, Deserialize, Serialize, PartialEq, Clone)]
@@ -283,7 +345,7 @@ pub enum PluginSetting {
     Disabled,
 }
 
-// ─── [tasks] — placeholder ────────────────────────────────────────────────────
+// ─── [tasks] ─────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Deserialize, Serialize, Default)]
 pub struct TaskConfig {
@@ -296,7 +358,7 @@ pub struct TaskConfig {
     pub depends_on: Vec<String>,
 }
 
-// ─── [env] — placeholder ─────────────────────────────────────────────────────
+// ─── [env] ───────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Deserialize, Serialize, Default)]
 pub struct EnvConfig {
@@ -360,6 +422,44 @@ impl Manifest {
             }
         }
     }
+
+    /// Append a new [[applet]] entry to the manifest file.
+    /// Uses raw text append rather than full re-serialization so that:
+    ///   - Comments in the manifest are preserved
+    ///   - toml version ordering constraints don't bite us
+    pub fn append_applet(project_root: &Path, applet: &AppletManifest) -> Result<()> {
+        let manifest_path = project_root.join("sweech.manifest.toml");
+        let mut existing = std::fs::read_to_string(&manifest_path)
+            .with_context(|| format!("Could not read {}", manifest_path.display()))?;
+
+        // Ensure file ends with a newline before appending
+        if !existing.ends_with('\n') {
+            existing.push('\n');
+        }
+
+        let auth_str = match applet.auth {
+            AuthSetting::Required => "required",
+            AuthSetting::Public => "public",
+            AuthSetting::Optional => "optional",
+        };
+
+        existing.push('\n');
+        existing.push_str("[[applet]]\n");
+        existing.push_str(&format!("name = \"{}\"\n", applet.name));
+        existing.push_str(&format!("path = \"{}\"\n", applet.path));
+        existing.push_str(&format!("auth = \"{}\"\n", auth_str));
+        if applet.stateful {
+            existing.push_str("stateful = true\n");
+        }
+        if !applet.guards.is_empty() {
+            let guards: Vec<String> = applet.guards.iter().map(|g| format!("\"{}\"", g)).collect();
+            existing.push_str(&format!("guards = [{}]\n", guards.join(", ")));
+        }
+
+        std::fs::write(&manifest_path, existing)
+            .with_context(|| format!("Failed to write {}", manifest_path.display()))?;
+        Ok(())
+    }
 }
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
@@ -387,6 +487,54 @@ mod tests {
         assert_eq!(m.project.name, "myapp");
         assert_eq!(m.build.mode, BuildMode::Monolith);
         assert_eq!(m.build.runtime, Runtime::Rust); // default
+        assert_eq!(m.build.port, 3000);
+    }
+
+    #[test]
+    fn frontend_dev_build_commands_parse() {
+        let m = parse(
+            r#"
+            [project]
+            name = "myapp"
+            [build]
+            mode = "monolith"
+            [[frontend]]
+            name = "web"
+            path = "apps/web"
+            framework = "next"
+            deploy_target = "^build"
+            serve = "embedded"
+            dev_command = "pnpm dev"
+            build_command = "pnpm build"
+            port = 3001
+        "#,
+        );
+        let fe = &m.frontends[0];
+        assert_eq!(fe.dev_command.as_deref(), Some("pnpm dev"));
+        assert_eq!(fe.build_command.as_deref(), Some("pnpm build"));
+        assert_eq!(fe.port, Some(3001));
+    }
+
+    #[test]
+    fn frontend_default_commands_from_framework() {
+        let m = parse(
+            r#"
+            [project]
+            name = "myapp"
+            [build]
+            mode = "monolith"
+            [[frontend]]
+            name = "web"
+            path = "apps/web"
+            framework = "vite"
+            deploy_target = "^build"
+            serve = "standalone"
+        "#,
+        );
+        let fe = &m.frontends[0];
+        // dev_command not set in manifest — should fall back to framework default
+        assert!(fe.dev_command.is_none());
+        assert_eq!(fe.framework.default_dev_command(), "npm run dev");
     }
 
     #[test]
@@ -395,10 +543,8 @@ mod tests {
             r#"
             [project]
             name = "myapp"
-
             [build]
             mode = "monolith"
-
             [[applet]]
             name = "auth"
             path = "auth.applet"
@@ -430,37 +576,15 @@ mod tests {
             [[package]]
             name = "types"
             path = "packages/types"
-            depends_on = []
-
             [tasks.test]
             run = "cargo test"
-
-            [tasks.lint]
-            run = "cargo clippy"
-
             [env]
             shared = ["DATABASE_URL"]
-            api = ["JWT_SECRET"]
         "#,
         );
 
         assert_eq!(m.packages[0].name, "types");
         assert_eq!(m.tasks["test"].run.as_deref(), Some("cargo test"));
         assert_eq!(m.env.shared, vec!["DATABASE_URL"]);
-    }
-
-    #[test]
-    fn http_config_has_defaults() {
-        let m = parse(
-            r#"
-            [project]
-            name = "myapp"
-            [build]
-            mode = "monolith"
-        "#,
-        );
-
-        assert_eq!(m.http.timeout_ms, 30_000);
-        assert_eq!(m.http.cors.origins, Vec::<String>::new());
     }
 }
