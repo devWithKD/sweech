@@ -27,40 +27,22 @@ use crate::response::AppletResponse;
 #[derive(Debug)]
 pub enum AppletError {
     /// The request is malformed or invalid — 400.
-    BadRequest {
-        code: String,
-        message: String,
-    },
+    BadRequest { code: String, message: String },
 
     /// Authentication required but missing/invalid — 401.
-    Unauthorized {
-        code: String,
-        message: String,
-    },
+    Unauthorized { code: String, message: String },
 
     /// Authenticated but not permitted — 403.
-    Forbidden {
-        code: String,
-        message: String,
-    },
+    Forbidden { code: String, message: String },
 
     /// Resource not found — 404.
-    NotFound {
-        code: String,
-        message: String,
-    },
+    NotFound { code: String, message: String },
 
     /// State conflict — 409.
-    Conflict {
-        code: String,
-        message: String,
-    },
+    Conflict { code: String, message: String },
 
     /// Something broke on our side — 500.
-    Internal {
-        code: String,
-        message: String,
-    },
+    Internal { code: String, message: String },
 }
 
 impl AppletError {
@@ -70,23 +52,38 @@ impl AppletError {
     // `impl Into<String>` — explained in response.rs — accepts &str or String.
 
     pub fn not_found(code: impl Into<String>, message: impl Into<String>) -> Self {
-        Self::NotFound { code: code.into(), message: message.into() }
+        Self::NotFound {
+            code: code.into(),
+            message: message.into(),
+        }
     }
 
     pub fn forbidden(code: impl Into<String>, message: impl Into<String>) -> Self {
-        Self::Forbidden { code: code.into(), message: message.into() }
+        Self::Forbidden {
+            code: code.into(),
+            message: message.into(),
+        }
     }
 
     pub fn unauthorized(code: impl Into<String>, message: impl Into<String>) -> Self {
-        Self::Unauthorized { code: code.into(), message: message.into() }
+        Self::Unauthorized {
+            code: code.into(),
+            message: message.into(),
+        }
     }
 
     pub fn bad_request(code: impl Into<String>, message: impl Into<String>) -> Self {
-        Self::BadRequest { code: code.into(), message: message.into() }
+        Self::BadRequest {
+            code: code.into(),
+            message: message.into(),
+        }
     }
 
     pub fn internal(code: impl Into<String>, message: impl Into<String>) -> Self {
-        Self::Internal { code: code.into(), message: message.into() }
+        Self::Internal {
+            code: code.into(),
+            message: message.into(),
+        }
     }
 
     /// Convert this error into an AppletResponse<T>.
@@ -107,12 +104,12 @@ impl AppletError {
         // fields out of the enum variant directly into local variables.
 
         match self {
-            Self::BadRequest   { code, message } => AppletResponse::bad_request(code, message),
+            Self::BadRequest { code, message } => AppletResponse::bad_request(code, message),
             Self::Unauthorized { code, message } => AppletResponse::unauthorized(code, message),
-            Self::Forbidden    { code, message } => AppletResponse::forbidden(code, message),
-            Self::NotFound     { code, message } => AppletResponse::not_found(code, message),
-            Self::Conflict     { code, message } => AppletResponse::conflict(code, message),
-            Self::Internal     { code, message } => AppletResponse::internal(code, message),
+            Self::Forbidden { code, message } => AppletResponse::forbidden(code, message),
+            Self::NotFound { code, message } => AppletResponse::not_found(code, message),
+            Self::Conflict { code, message } => AppletResponse::conflict(code, message),
+            Self::Internal { code, message } => AppletResponse::internal(code, message),
         }
     }
 }
@@ -176,7 +173,9 @@ pub trait Guard: Send + Sync {
     /// e.g. "billing:active", "role:admin"
     ///
     /// Static method — used at registration time.
-    fn name() -> &'static str where Self: Sized;
+    fn name() -> &'static str
+    where
+        Self: Sized;
 
     /// Instance version of name() — callable on trait objects (Box<dyn Guard>).
     ///

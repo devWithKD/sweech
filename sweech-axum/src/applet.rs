@@ -1,8 +1,7 @@
 use axum::Router;
-use std::sync::Arc;
 use sweech_core::auth::AuthRequirement;
 
-use crate::router::{AppState, AppletRouter, GuardObject};
+use crate::router::{AppState, AppletRouter};
 
 // ─── What is this file? ───────────────────────────────────────────────────────
 //

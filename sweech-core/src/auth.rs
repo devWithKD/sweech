@@ -37,7 +37,7 @@ pub enum AuthRequirement {
     /// A valid, verified token must be present.
     /// `ctx.user` will be `Some(claims)`.
     /// If missing or invalid → 401 Unauthorized, handler never runs.
-    #[default]  // AuthRequirement::default() returns this variant
+    #[default] // AuthRequirement::default() returns this variant
     Required,
 
     /// No token needed. `ctx.user` will always be `None`.

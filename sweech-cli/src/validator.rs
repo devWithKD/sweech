@@ -1,4 +1,4 @@
-use crate::manifest::{BuildMode, DeployTarget, FrontendFramework, Manifest, Runtime, ServeMode};
+use crate::manifest::{BuildMode, DeployTarget, FrontendFramework, Manifest, ServeMode};
 use crate::scanner::ScannedProject;
 
 // ─── What is this file? ───────────────────────────────────────────────────────
@@ -363,9 +363,11 @@ mod tests {
 
         let issues = validate(&manifest, &empty_project());
         assert!(has_errors(&issues));
-        assert!(issues
-            .iter()
-            .any(|i| i.code == "MISSING_SERVE_ON_BUILD_FRONTEND"));
+        assert!(
+            issues
+                .iter()
+                .any(|i| i.code == "MISSING_SERVE_ON_BUILD_FRONTEND")
+        );
     }
 
     #[test]
@@ -388,8 +390,10 @@ mod tests {
 
         let issues = validate(&manifest, &empty_project());
         assert!(has_errors(&issues));
-        assert!(issues
-            .iter()
-            .any(|i| i.code == "SERVERLESS_GENERIC_DEPLOY_TARGET"));
+        assert!(
+            issues
+                .iter()
+                .any(|i| i.code == "SERVERLESS_GENERIC_DEPLOY_TARGET")
+        );
     }
 }

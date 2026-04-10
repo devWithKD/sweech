@@ -1,11 +1,8 @@
-use serde::{de::DeserializeOwned, Serialize};
 use async_trait::async_trait;
+use serde::{Serialize, de::DeserializeOwned};
 
 use crate::{
-    auth::AuthRequirement,
-    context::AppletContext,
-    error::AppletError,
-    response::AppletResponse,
+    auth::AuthRequirement, context::AppletContext, error::AppletError, response::AppletResponse,
 };
 
 // ─── What is this file? ───────────────────────────────────────────────────────
@@ -98,13 +95,18 @@ pub trait Handler: Send + Sync {
     type Response: Serialize + Send;
 
     /// Which HTTP method this handler responds to.
-    fn method() -> HttpMethod where Self: Sized;
+    fn method() -> HttpMethod
+    where
+        Self: Sized;
 
     /// Who is allowed to call this handler.
     ///
     /// Default is `Required` — you must explicitly opt down to Public or Optional.
     /// This is intentional: secure by default, opt down, never opt up.
-    fn auth() -> AuthRequirement where Self: Sized {
+    fn auth() -> AuthRequirement
+    where
+        Self: Sized,
+    {
         AuthRequirement::Required
     }
 
@@ -117,7 +119,10 @@ pub trait Handler: Send + Sync {
     /// default — it does NOT merge. If your applet default is ["billing:active"]
     /// and you declare guards() = &["role:admin"], only "role:admin" runs.
     /// If you want both, list both explicitly.
-    fn guards() -> &'static [&'static str] where Self: Sized {
+    fn guards() -> &'static [&'static str]
+    where
+        Self: Sized,
+    {
         &[]
     }
 
@@ -130,10 +135,7 @@ pub trait Handler: Send + Sync {
     ///
     /// This function should ONLY contain business logic.
     /// Never check auth here. Never check guards here. The framework did it.
-    async fn call(
-        req: Self::Request,
-        ctx: AppletContext,
-    ) -> AppletResponse<Self::Response>;
+    async fn call(req: Self::Request, ctx: AppletContext) -> AppletResponse<Self::Response>;
 }
 
 // ─── HttpMethod ───────────────────────────────────────────────────────────────
@@ -144,7 +146,7 @@ pub trait Handler: Send + Sync {
 
 /// HTTP method for a handler.
 #[derive(Debug, Clone, PartialEq, Serialize)]
-#[serde(rename_all = "UPPERCASE")]  // serializes as "GET", "POST" etc.
+#[serde(rename_all = "UPPERCASE")] // serializes as "GET", "POST" etc.
 pub enum HttpMethod {
     Get,
     Post,
@@ -157,10 +159,10 @@ impl HttpMethod {
     /// Parse from a string — used by the CLI scanner.
     pub fn from_str(s: &str) -> Option<Self> {
         match s.to_uppercase().as_str() {
-            "GET"    => Some(Self::Get),
-            "POST"   => Some(Self::Post),
-            "PUT"    => Some(Self::Put),
-            "PATCH"  => Some(Self::Patch),
+            "GET" => Some(Self::Get),
+            "POST" => Some(Self::Post),
+            "PUT" => Some(Self::Put),
+            "PATCH" => Some(Self::Patch),
             "DELETE" => Some(Self::Delete),
             _ => None,
         }
@@ -169,10 +171,10 @@ impl HttpMethod {
     /// Convert to the string representation used in generated code.
     pub fn as_str(&self) -> &'static str {
         match self {
-            Self::Get    => "GET",
-            Self::Post   => "POST",
-            Self::Put    => "PUT",
-            Self::Patch  => "PATCH",
+            Self::Get => "GET",
+            Self::Post => "POST",
+            Self::Put => "PUT",
+            Self::Patch => "PATCH",
             Self::Delete => "DELETE",
         }
     }
@@ -198,10 +200,10 @@ mod tests {
 
     #[test]
     fn http_method_parse() {
-        assert_eq!(HttpMethod::from_str("GET"),  Some(HttpMethod::Get));
+        assert_eq!(HttpMethod::from_str("GET"), Some(HttpMethod::Get));
         assert_eq!(HttpMethod::from_str("post"), Some(HttpMethod::Post));
-        assert_eq!(HttpMethod::from_str("PATCH"),Some(HttpMethod::Patch));
-        assert_eq!(HttpMethod::from_str("bad"),  None);
+        assert_eq!(HttpMethod::from_str("PATCH"), Some(HttpMethod::Patch));
+        assert_eq!(HttpMethod::from_str("bad"), None);
     }
 
     #[test]

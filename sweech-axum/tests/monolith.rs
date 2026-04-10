@@ -13,25 +13,24 @@
 //       route.rs           → GET  /products      (public)
 //       route.rs           → POST /products      (requires auth)
 
-use std::sync::Arc;
 use async_trait::async_trait;
 use axum::{
     body::Body,
     extract::Request,
-    http::{header, request::Parts, Method, StatusCode},
+    http::{Method, StatusCode, header, request::Parts},
 };
 use serde::{Deserialize, Serialize};
-use tower::ServiceExt;
-use sweech_core::{
-    AppletContext, AppletError, AppletResponse, AuthRequirement, UserClaims,
-    error::Guard,
-    handler::{Handler, HttpMethod},
-};
+use std::sync::Arc;
 use sweech_axum::{
     Applet, AppletConfig, SweechApp,
-    middleware::{auth_middleware, AuthState, AuthValidator},
-    router::{AppletRouter, AppState, GuardObject},
+    middleware::{AuthState, AuthValidator, auth_middleware},
+    router::{AppState, AppletRouter},
 };
+use sweech_core::{
+    AppletContext, AppletResponse, AuthRequirement, UserClaims,
+    handler::{Handler, HttpMethod},
+};
+use tower::ServiceExt;
 
 // ─── Shared auth setup ────────────────────────────────────────────────────────
 
@@ -40,28 +39,45 @@ struct TestAuth;
 #[async_trait]
 impl AuthValidator for TestAuth {
     async fn validate(&self, parts: &Parts) -> Option<UserClaims> {
-        let token = parts.headers
+        let token = parts
+            .headers
             .get(header::AUTHORIZATION)?
-            .to_str().ok()?
+            .to_str()
+            .ok()?
             .strip_prefix("Bearer ")?;
 
         let mut split = token.splitn(2, ':');
         let user_id = split.next()?.to_string();
-        let roles: Vec<String> = split.next()
-            .map(|r| r.split(',').filter(|s| !s.is_empty()).map(str::to_string).collect())
+        let roles: Vec<String> = split
+            .next()
+            .map(|r| {
+                r.split(',')
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_string)
+                    .collect()
+            })
             .unwrap_or_default();
 
-        Some(UserClaims { user_id, tenant_id: None, roles, raw: serde_json::Value::Null })
+        Some(UserClaims {
+            user_id,
+            tenant_id: None,
+            roles,
+            raw: serde_json::Value::Null,
+        })
     }
 }
 
 // ─── auth.applet handlers ─────────────────────────────────────────────────────
 
 #[derive(Deserialize)]
-struct LoginRequest { username: String }
+struct LoginRequest {
+    username: String,
+}
 
 #[derive(Serialize)]
-struct LoginResponse { token: String }
+struct LoginResponse {
+    token: String,
+}
 
 struct LoginHandler;
 
@@ -69,8 +85,12 @@ struct LoginHandler;
 impl Handler for LoginHandler {
     type Request = LoginRequest;
     type Response = LoginResponse;
-    fn method() -> HttpMethod { HttpMethod::Post }
-    fn auth() -> AuthRequirement { AuthRequirement::Public }
+    fn method() -> HttpMethod {
+        HttpMethod::Post
+    }
+    fn auth() -> AuthRequirement {
+        AuthRequirement::Public
+    }
     async fn call(req: LoginRequest, _ctx: AppletContext) -> AppletResponse<LoginResponse> {
         // In real life: verify credentials, issue token
         AppletResponse::ok(LoginResponse {
@@ -83,7 +103,9 @@ impl Handler for LoginHandler {
 struct MeRequest {}
 
 #[derive(Serialize)]
-struct MeResponse { user_id: String }
+struct MeResponse {
+    user_id: String,
+}
 
 struct MeHandler;
 
@@ -91,7 +113,9 @@ struct MeHandler;
 impl Handler for MeHandler {
     type Request = MeRequest;
     type Response = MeResponse;
-    fn method() -> HttpMethod { HttpMethod::Get }
+    fn method() -> HttpMethod {
+        HttpMethod::Get
+    }
     // auth defaults to Required
     async fn call(_req: MeRequest, ctx: AppletContext) -> AppletResponse<MeResponse> {
         let user_id = ctx.user.map(|u| u.user_id).unwrap_or_default();
@@ -105,7 +129,9 @@ impl Handler for MeHandler {
 struct ListProductsRequest {}
 
 #[derive(Serialize)]
-struct ProductsResponse { products: Vec<String> }
+struct ProductsResponse {
+    products: Vec<String>,
+}
 
 struct ListProductsHandler;
 
@@ -113,9 +139,16 @@ struct ListProductsHandler;
 impl Handler for ListProductsHandler {
     type Request = ListProductsRequest;
     type Response = ProductsResponse;
-    fn method() -> HttpMethod { HttpMethod::Get }
-    fn auth() -> AuthRequirement { AuthRequirement::Public }
-    async fn call(_req: ListProductsRequest, _ctx: AppletContext) -> AppletResponse<ProductsResponse> {
+    fn method() -> HttpMethod {
+        HttpMethod::Get
+    }
+    fn auth() -> AuthRequirement {
+        AuthRequirement::Public
+    }
+    async fn call(
+        _req: ListProductsRequest,
+        _ctx: AppletContext,
+    ) -> AppletResponse<ProductsResponse> {
         AppletResponse::ok(ProductsResponse {
             products: vec!["widget".to_string(), "gadget".to_string()],
         })
@@ -123,10 +156,15 @@ impl Handler for ListProductsHandler {
 }
 
 #[derive(Deserialize)]
-struct CreateProductRequest { name: String }
+struct CreateProductRequest {
+    name: String,
+}
 
 #[derive(Serialize)]
-struct CreateProductResponse { id: String, name: String }
+struct CreateProductResponse {
+    id: String,
+    name: String,
+}
 
 struct CreateProductHandler;
 
@@ -134,9 +172,14 @@ struct CreateProductHandler;
 impl Handler for CreateProductHandler {
     type Request = CreateProductRequest;
     type Response = CreateProductResponse;
-    fn method() -> HttpMethod { HttpMethod::Post }
+    fn method() -> HttpMethod {
+        HttpMethod::Post
+    }
     // auth defaults to Required
-    async fn call(req: CreateProductRequest, _ctx: AppletContext) -> AppletResponse<CreateProductResponse> {
+    async fn call(
+        req: CreateProductRequest,
+        _ctx: AppletContext,
+    ) -> AppletResponse<CreateProductResponse> {
         AppletResponse::created(CreateProductResponse {
             id: "prod-001".to_string(),
             name: req.name,
@@ -147,7 +190,9 @@ impl Handler for CreateProductHandler {
 // ─── App factory ──────────────────────────────────────────────────────────────
 
 fn build_monolith() -> axum::Router {
-    let auth_state = AuthState { validator: Arc::new(TestAuth) };
+    let auth_state = AuthState {
+        validator: Arc::new(TestAuth),
+    };
     let app_state = AppState {
         auth: auth_state.clone(),
         guards: Arc::new(vec![]),
@@ -189,14 +234,17 @@ fn build_monolith() -> axum::Router {
 async fn auth_login_is_public_and_reachable() {
     let app = build_monolith();
 
-    let resp = app.oneshot(
-        Request::builder()
-            .method(Method::POST)
-            .uri("/auth/login")
-            .header(header::CONTENT_TYPE, "application/json")
-            .body(Body::from(r#"{"username":"alice"}"#))
-            .unwrap()
-    ).await.unwrap();
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/auth/login")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(r#"{"username":"alice"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
 
     assert_eq!(resp.status(), StatusCode::OK);
     let body = to_string(resp).await;
@@ -215,13 +263,17 @@ async fn auth_me_requires_token() {
 async fn auth_me_with_token_returns_user() {
     let app = build_monolith();
 
-    let resp = app.oneshot(
-        Request::builder()
-            .method(Method::GET)
-            .uri("/auth/me")
-            .header(header::AUTHORIZATION, "Bearer user-bob:")
-            .body(Body::empty()).unwrap()
-    ).await.unwrap();
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri("/auth/me")
+                .header(header::AUTHORIZATION, "Bearer user-bob:")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
 
     assert_eq!(resp.status(), StatusCode::OK);
     let body = to_string(resp).await;
@@ -242,14 +294,17 @@ async fn products_list_is_public() {
 async fn products_create_requires_auth() {
     let app = build_monolith();
 
-    let resp = app.oneshot(
-        Request::builder()
-            .method(Method::POST)
-            .uri("/products")
-            .header(header::CONTENT_TYPE, "application/json")
-            .body(Body::from(r#"{"name":"new-widget"}"#))
-            .unwrap()
-    ).await.unwrap();
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/products")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(r#"{"name":"new-widget"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
 
     assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
 }
@@ -258,15 +313,18 @@ async fn products_create_requires_auth() {
 async fn products_create_with_auth_returns_201() {
     let app = build_monolith();
 
-    let resp = app.oneshot(
-        Request::builder()
-            .method(Method::POST)
-            .uri("/products")
-            .header(header::AUTHORIZATION, "Bearer user-alice:")
-            .header(header::CONTENT_TYPE, "application/json")
-            .body(Body::from(r#"{"name":"new-widget"}"#))
-            .unwrap()
-    ).await.unwrap();
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/products")
+                .header(header::AUTHORIZATION, "Bearer user-alice:")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(r#"{"name":"new-widget"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
 
     assert_eq!(resp.status(), StatusCode::CREATED);
     let body = to_string(resp).await;
@@ -285,10 +343,16 @@ async fn applets_dont_bleed_into_each_other() {
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 fn get(uri: &str) -> Request<Body> {
-    Request::builder().method(Method::GET).uri(uri).body(Body::empty()).unwrap()
+    Request::builder()
+        .method(Method::GET)
+        .uri(uri)
+        .body(Body::empty())
+        .unwrap()
 }
 
 async fn to_string(resp: axum::response::Response) -> String {
-    let b = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let b = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
     String::from_utf8(b.to_vec()).unwrap()
 }

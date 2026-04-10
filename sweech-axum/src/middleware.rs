@@ -1,10 +1,10 @@
 use axum::{
+    Json,
     extract::Request,
+    http::StatusCode,
     http::request::Parts,
     middleware::Next,
     response::{IntoResponse, Response},
-    http::StatusCode,
-    Json,
 };
 use serde_json::json;
 use std::sync::Arc;
@@ -76,10 +76,11 @@ pub fn enforce_auth(
                     "error_code": "AUTH_REQUIRED",
                     "error_message": "Authentication required"
                 })),
-            ).into_response()),
+            )
+                .into_response()),
         },
         AuthRequirement::Optional => Ok(claims),
-        AuthRequirement::Public   => Ok(None),
+        AuthRequirement::Public => Ok(None),
     }
 }
 
@@ -87,5 +88,6 @@ pub fn forbidden_response(code: &str, message: &str) -> Response {
     (
         StatusCode::FORBIDDEN,
         Json(json!({ "error_code": code, "error_message": message })),
-    ).into_response()
+    )
+        .into_response()
 }

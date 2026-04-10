@@ -1,22 +1,22 @@
-use std::sync::Arc;
 use async_trait::async_trait;
 use axum::{
+    Router,
     body::Body,
     extract::Request,
-    http::{header, request::Parts, Method, StatusCode},
-    Router,
+    http::{Method, StatusCode, header, request::Parts},
 };
 use serde::{Deserialize, Serialize};
-use tower::ServiceExt;
+use std::sync::Arc;
+use sweech_axum::{
+    middleware::{AuthState, AuthValidator, auth_middleware},
+    router::{AppState, AppletRouter, GuardObject},
+};
 use sweech_core::{
     AppletContext, AppletError, AppletResponse, AuthRequirement, UserClaims,
-    handler::{Handler, HttpMethod},
     error::Guard,
+    handler::{Handler, HttpMethod},
 };
-use sweech_axum::{
-    middleware::{auth_middleware, AuthState, AuthValidator},
-    router::{AppletRouter, AppState, GuardObject},
-};
+use tower::ServiceExt;
 
 // ─── Handler 1: Public ping ───────────────────────────────────────────────────
 
@@ -24,7 +24,9 @@ use sweech_axum::{
 struct PingRequest {}
 
 #[derive(Serialize)]
-struct PingResponse { message: String }
+struct PingResponse {
+    message: String,
+}
 
 struct PingHandler;
 
@@ -32,10 +34,16 @@ struct PingHandler;
 impl Handler for PingHandler {
     type Request = PingRequest;
     type Response = PingResponse;
-    fn method() -> HttpMethod { HttpMethod::Get }
-    fn auth() -> AuthRequirement { AuthRequirement::Public }
+    fn method() -> HttpMethod {
+        HttpMethod::Get
+    }
+    fn auth() -> AuthRequirement {
+        AuthRequirement::Public
+    }
     async fn call(_req: PingRequest, _ctx: AppletContext) -> AppletResponse<PingResponse> {
-        AppletResponse::ok(PingResponse { message: "pong".to_string() })
+        AppletResponse::ok(PingResponse {
+            message: "pong".to_string(),
+        })
     }
 }
 
@@ -45,7 +53,9 @@ impl Handler for PingHandler {
 struct WhoAmIRequest {}
 
 #[derive(Serialize)]
-struct WhoAmIResponse { user_id: String }
+struct WhoAmIResponse {
+    user_id: String,
+}
 
 struct WhoAmIHandler;
 
@@ -53,7 +63,9 @@ struct WhoAmIHandler;
 impl Handler for WhoAmIHandler {
     type Request = WhoAmIRequest;
     type Response = WhoAmIResponse;
-    fn method() -> HttpMethod { HttpMethod::Get }
+    fn method() -> HttpMethod {
+        HttpMethod::Get
+    }
     // auth() defaults to Required
     async fn call(_req: WhoAmIRequest, ctx: AppletContext) -> AppletResponse<WhoAmIResponse> {
         let user_id = ctx.user.map(|u| u.user_id).unwrap_or_default();
@@ -67,7 +79,9 @@ impl Handler for WhoAmIHandler {
 struct AdminRequest {}
 
 #[derive(Serialize)]
-struct AdminResponse { secret: String }
+struct AdminResponse {
+    secret: String,
+}
 
 struct AdminHandler;
 
@@ -75,10 +89,16 @@ struct AdminHandler;
 impl Handler for AdminHandler {
     type Request = AdminRequest;
     type Response = AdminResponse;
-    fn method() -> HttpMethod { HttpMethod::Get }
-    fn guards() -> &'static [&'static str] { &["role:admin"] }
+    fn method() -> HttpMethod {
+        HttpMethod::Get
+    }
+    fn guards() -> &'static [&'static str] {
+        &["role:admin"]
+    }
     async fn call(_req: AdminRequest, _ctx: AppletContext) -> AppletResponse<AdminResponse> {
-        AppletResponse::ok(AdminResponse { secret: "admin_data".to_string() })
+        AppletResponse::ok(AdminResponse {
+            secret: "admin_data".to_string(),
+        })
     }
 }
 
@@ -88,12 +108,19 @@ struct AdminGuard;
 
 #[async_trait]
 impl Guard for AdminGuard {
-    fn name() -> &'static str { "role:admin" }
-    fn instance_name(&self) -> &'static str { "role:admin" }
+    fn name() -> &'static str {
+        "role:admin"
+    }
+    fn instance_name(&self) -> &'static str {
+        "role:admin"
+    }
     async fn check(&self, ctx: &AppletContext) -> Result<(), AppletError> {
         match &ctx.user {
             Some(claims) if claims.has_role("admin") => Ok(()),
-            _ => Err(AppletError::forbidden("INSUFFICIENT_ROLE", "Admin role required")),
+            _ => Err(AppletError::forbidden(
+                "INSUFFICIENT_ROLE",
+                "Admin role required",
+            )),
         }
     }
 }
@@ -106,15 +133,23 @@ struct TestAuthValidator;
 #[async_trait]
 impl AuthValidator for TestAuthValidator {
     async fn validate(&self, parts: &Parts) -> Option<UserClaims> {
-        let token = parts.headers
+        let token = parts
+            .headers
             .get(header::AUTHORIZATION)?
-            .to_str().ok()?
+            .to_str()
+            .ok()?
             .strip_prefix("Bearer ")?;
 
         let mut parts = token.splitn(2, ':');
         let user_id = parts.next()?.to_string();
-        let roles: Vec<String> = parts.next()
-            .map(|r| r.split(',').filter(|s| !s.is_empty()).map(str::to_string).collect())
+        let roles: Vec<String> = parts
+            .next()
+            .map(|r| {
+                r.split(',')
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_string)
+                    .collect()
+            })
             .unwrap_or_default();
 
         Some(UserClaims {
@@ -135,9 +170,7 @@ fn build_app() -> Router {
 
     let app_state = AppState {
         auth: auth_state.clone(),
-        guards: Arc::new(vec![
-            Arc::new(AdminGuard) as Arc<dyn GuardObject>,
-        ]),
+        guards: Arc::new(vec![Arc::new(AdminGuard) as Arc<dyn GuardObject>]),
     };
 
     // Build routes, attach state
@@ -175,13 +208,17 @@ async fn required_auth_without_token_returns_401() {
 #[tokio::test]
 async fn required_auth_with_token_returns_200() {
     let app = build_app();
-    let resp = app.oneshot(
-        Request::builder()
-            .method(Method::GET)
-            .uri("/whoami")
-            .header(header::AUTHORIZATION, "Bearer user-456:")
-            .body(Body::empty()).unwrap()
-    ).await.unwrap();
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri("/whoami")
+                .header(header::AUTHORIZATION, "Bearer user-456:")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
     let body = to_string(resp).await;
     assert!(body.contains("user-456"), "body: {body}");
@@ -190,26 +227,34 @@ async fn required_auth_with_token_returns_200() {
 #[tokio::test]
 async fn guard_blocks_non_admin() {
     let app = build_app();
-    let resp = app.oneshot(
-        Request::builder()
-            .method(Method::GET)
-            .uri("/admin")
-            .header(header::AUTHORIZATION, "Bearer user-123:billing:active")
-            .body(Body::empty()).unwrap()
-    ).await.unwrap();
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri("/admin")
+                .header(header::AUTHORIZATION, "Bearer user-123:billing:active")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
     assert_eq!(resp.status(), StatusCode::FORBIDDEN);
 }
 
 #[tokio::test]
 async fn guard_allows_admin() {
     let app = build_app();
-    let resp = app.oneshot(
-        Request::builder()
-            .method(Method::GET)
-            .uri("/admin")
-            .header(header::AUTHORIZATION, "Bearer user-999:admin")
-            .body(Body::empty()).unwrap()
-    ).await.unwrap();
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri("/admin")
+                .header(header::AUTHORIZATION, "Bearer user-999:admin")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
     let body = to_string(resp).await;
     assert!(body.contains("admin_data"), "body: {body}");
@@ -226,6 +271,8 @@ fn get(uri: &str) -> Request<Body> {
 }
 
 async fn to_string(resp: axum::response::Response) -> String {
-    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
     String::from_utf8(bytes.to_vec()).unwrap()
 }

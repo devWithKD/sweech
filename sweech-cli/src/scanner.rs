@@ -43,6 +43,7 @@ use walkdir::WalkDir;
 // Note: [userId] folder → :userId path segment (Next.js convention → Express convention)
 
 /// A route file found inside an applet.
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct ScannedRoute {
     /// Path segments between the applet root and this route.rs.
@@ -74,6 +75,7 @@ impl ScannedRoute {
 }
 
 /// An applet found in the project.
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct ScannedApplet {
     /// The applet name, e.g. "auth" (derived from "auth.applet" folder)
@@ -94,6 +96,7 @@ impl ScannedApplet {
 }
 
 /// The full result of scanning a project.
+#[allow(dead_code)]
 #[derive(Debug)]
 pub struct ScannedProject {
     /// Absolute path to the project root (where sweech.manifest.toml lives)

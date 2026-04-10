@@ -2,12 +2,12 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use axum::{
+    Json, Router,
     body::Bytes,
     extract::{Request, State},
     http::StatusCode,
     response::{IntoResponse, Response},
     routing::{delete, get, patch, post, put},
-    Json, Router,
 };
 use serde_json::json;
 use sweech_core::{
@@ -16,8 +16,8 @@ use sweech_core::{
 };
 
 use crate::{
-    extractor::{build_context, IncomingRequest},
-    middleware::{enforce_auth, AuthState},
+    extractor::{IncomingRequest, build_context},
+    middleware::{AuthState, enforce_auth},
 };
 
 /// Shared state injected into every route handler.
@@ -36,7 +36,8 @@ pub struct AppState {
 #[async_trait::async_trait]
 pub trait GuardObject: Send + Sync {
     fn name_str(&self) -> &'static str;
-    async fn check(&self, ctx: &sweech_core::AppletContext) -> Result<(), sweech_core::AppletError>;
+    async fn check(&self, ctx: &sweech_core::AppletContext)
+    -> Result<(), sweech_core::AppletError>;
 }
 
 #[async_trait::async_trait]
@@ -48,7 +49,10 @@ where
         G::name()
     }
 
-    async fn check(&self, ctx: &sweech_core::AppletContext) -> Result<(), sweech_core::AppletError> {
+    async fn check(
+        &self,
+        ctx: &sweech_core::AppletContext,
+    ) -> Result<(), sweech_core::AppletError> {
         Guard::check(self, ctx).await
     }
 }
@@ -79,7 +83,11 @@ where
                     let mut parts = pair.splitn(2, '=');
                     let key = parts.next()?.to_string();
                     let val = parts.next().unwrap_or("").to_string();
-                    if key.is_empty() { None } else { Some((key, val)) }
+                    if key.is_empty() {
+                        None
+                    } else {
+                        Some((key, val))
+                    }
                 })
                 .collect()
         })
@@ -88,10 +96,14 @@ where
     let body: Bytes = match axum::body::to_bytes(req.into_body(), 4 * 1024 * 1024).await {
         Ok(b) => b,
         Err(_) => {
-            return (StatusCode::BAD_REQUEST, Json(json!({
-                "error_code": "BODY_READ_ERROR",
-                "error_message": "Failed to read request body"
-            }))).into_response();
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({
+                    "error_code": "BODY_READ_ERROR",
+                    "error_message": "Failed to read request body"
+                })),
+            )
+                .into_response();
         }
     };
 
@@ -112,10 +124,14 @@ where
     let request_data: H::Request = match serde_json::from_slice(slice) {
         Ok(r) => r,
         Err(e) => {
-            return (StatusCode::BAD_REQUEST, Json(json!({
-                "error_code": "INVALID_REQUEST_BODY",
-                "error_message": format!("Failed to parse request body: {}", e)
-            }))).into_response();
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({
+                    "error_code": "INVALID_REQUEST_BODY",
+                    "error_message": format!("Failed to parse request body: {}", e)
+                })),
+            )
+                .into_response();
         }
     };
 
@@ -144,8 +160,8 @@ where
 // ─── Response helpers ─────────────────────────────────────────────────────────
 
 fn applet_response_to_axum<T: serde::Serialize>(resp: sweech_core::AppletResponse<T>) -> Response {
-    let status = StatusCode::from_u16(resp.status.as_u16())
-        .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+    let status =
+        StatusCode::from_u16(resp.status.as_u16()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
 
     if resp.status.is_success() {
         match resp.body {
@@ -156,10 +172,14 @@ fn applet_response_to_axum<T: serde::Serialize>(resp: sweech_core::AppletRespons
             None => status.into_response(),
         }
     } else {
-        (status, Json(json!({
-            "error_code": resp.error_code,
-            "error_message": resp.error_message,
-        }))).into_response()
+        (
+            status,
+            Json(json!({
+                "error_code": resp.error_code,
+                "error_message": resp.error_message,
+            })),
+        )
+            .into_response()
     }
 }
 
@@ -175,7 +195,9 @@ pub struct AppletRouter {
 
 impl AppletRouter {
     pub fn new() -> Self {
-        Self { inner: Router::new() }
+        Self {
+            inner: Router::new(),
+        }
     }
 
     pub fn register<H>(self, path: &str) -> Self
@@ -187,10 +209,10 @@ impl AppletRouter {
         };
 
         let route = match H::method() {
-            HttpMethod::Get    => self.inner.route(path, get(handler)),
-            HttpMethod::Post   => self.inner.route(path, post(handler)),
-            HttpMethod::Put    => self.inner.route(path, put(handler)),
-            HttpMethod::Patch  => self.inner.route(path, patch(handler)),
+            HttpMethod::Get => self.inner.route(path, get(handler)),
+            HttpMethod::Post => self.inner.route(path, post(handler)),
+            HttpMethod::Put => self.inner.route(path, put(handler)),
+            HttpMethod::Patch => self.inner.route(path, patch(handler)),
             HttpMethod::Delete => self.inner.route(path, delete(handler)),
         };
 
@@ -203,5 +225,7 @@ impl AppletRouter {
 }
 
 impl Default for AppletRouter {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }
