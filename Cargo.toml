@@ -1,0 +1,7 @@
+[workspace]
+members = [
+    "sweech-core",
+    "sweech-axum",
+    "sweech-cli",
+]
+resolver = "3"
